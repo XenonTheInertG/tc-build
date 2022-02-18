@@ -381,9 +381,10 @@ def linker_test(cc, ld):
     echo = subprocess.Popen(['echo', 'int main() { return 0; }'],
                             stdout=subprocess.PIPE)
     return subprocess.run(
-        [cc, '-fuse-ld=' + ld, '-o', '/dev/null', '-x', 'c', '-'],
+        [cc, f'-fuse-ld={ld}', '-o', '/dev/null', '-x', 'c', '-'],
         stdin=echo.stdout,
-        stderr=subprocess.DEVNULL).returncode
+        stderr=subprocess.DEVNULL,
+    ).returncode
 
 
 def versioned_binaries(binary_name):
@@ -447,13 +448,9 @@ def check_cc_ld_variables(root_folder):
     # If the user specified a C++ compiler, get its full path
     if 'CXX' in os.environ:
         cxx = shutil.which(os.environ['CXX'])
-    # Otherwise, use the one where CC is
     else:
-        if "clang" in cc:
-            cxx = "clang++"
-        else:
-            cxx = "g++"
-        cxx = shutil.which(cxx, path=cc_folder + ":" + os.environ['PATH'])
+        cxx = "clang++" if "clang" in cc else "g++"
+        cxx = shutil.which(cxx, path=f'{cc_folder}:' + os.environ['PATH'])
     cxx = cxx.strip()
 
     # If the user specified a linker
@@ -468,39 +465,34 @@ def check_cc_ld_variables(root_folder):
             print("LD won't work with " + cc +
                   ", saving you from yourself by ignoring LD value")
             ld = None
-    # If the user didn't specify a linker
-    else:
-        # and we're using clang, try to find the fastest one
-        if "clang" in cc:
-            possible_linkers = ['lld', 'gold', 'bfd']
-            for linker in possible_linkers:
+    elif "clang" in cc:
+        possible_linkers = ['lld', 'gold', 'bfd']
+        for linker in possible_linkers:
                 # We want to find lld wherever the clang we are using is located
-                ld = shutil.which("ld." + linker,
-                                  path=cc_folder + ":" + os.environ['PATH'])
-                if ld is not None:
-                    break
+            ld = shutil.which(f'ld.{linker}', path=f'{cc_folder}:' + os.environ['PATH'])
+            if ld is not None:
+                break
             # If clang is older than 3.9, it won't accept absolute paths so we
             # need to just pass it the name (and modify PATH so that it is found properly)
             # https://github.com/llvm/llvm-project/commit/e43b7413597d8102a4412f9de41102e55f4f2ec9
-            if clang_version(cc, root_folder) < 30900:
-                os.environ['PATH'] = cc_folder + ":" + os.environ['PATH']
-                ld = linker
-        # and we're using gcc, try to use gold
-        else:
-            ld = "gold"
-            if linker_test(cc, ld):
-                ld = None
+        if clang_version(cc, root_folder) < 30900:
+            os.environ['PATH'] = f'{cc_folder}:' + os.environ['PATH']
+            ld = linker
+    else:
+        ld = "gold"
+        if linker_test(cc, ld):
+            ld = None
 
     # Print what binaries we are using to compile/link with so the user can
     # decide if that is proper or not
-    print("CC: " + cc)
-    print("CXX: " + cxx)
+    print(f'CC: {cc}')
+    print(f'CXX: {cxx}')
     if ld is not None:
         ld = ld.strip()
-        ld_to_print = shutil.which("ld." + ld)
+        ld_to_print = shutil.which(f'ld.{ld}')
         if ld_to_print is None:
             ld_to_print = shutil.which(ld)
-        print("LD: " + ld_to_print)
+        print(f'LD: {ld_to_print}')
 
     return cc, cxx, ld
 
@@ -699,8 +691,9 @@ def slim_cmake_defines():
     Generate a set of cmake defines to slim down the LLVM toolchain
     :return: A set of defines
     """
-    # yapf: disable
-    defines = {
+    # yapf: enable
+
+    return {
         # Objective-C Automatic Reference Counting (we don't use Objective-C)
         # https://clang.llvm.org/docs/AutomaticReferenceCounting.html
         'CLANG_ENABLE_ARCMT': 'OFF',
@@ -720,11 +713,8 @@ def slim_cmake_defines():
         # Don't include documentation build targets because it is available on the web
         'LLVM_INCLUDE_DOCS': 'OFF',
         # Don't include example build targets to save on cmake cycles
-        'LLVM_INCLUDE_EXAMPLES': 'OFF'
+        'LLVM_INCLUDE_EXAMPLES': 'OFF',
     }
-    # yapf: enable
-
-    return defines
 
 
 def get_stage_binary(binary, dirs, stage):
@@ -746,12 +736,13 @@ def if_binary_exists(binary_name, cc):
     :param cc: Path to CC binary
     :return: A path to binary if it exists and clang is being used, None if either condition is false
     """
-    binary = None
-    if "clang" in cc:
-        binary = shutil.which(binary_name,
-                              path=os.path.dirname(cc) + ":" +
-                              os.environ['PATH'])
-    return binary
+    return (
+        shutil.which(
+            binary_name, path=(f'{os.path.dirname(cc)}:' + os.environ['PATH'])
+        )
+        if "clang" in cc
+        else None
+    )
 
 
 def cc_ld_cmake_defines(dirs, env_vars, stage):
@@ -777,10 +768,7 @@ def cc_ld_cmake_defines(dirs, env_vars, stage):
         clang_tblgen = None
         llvm_tblgen = None
     else:
-        if pgo_stage(stage):
-            stage = 2
-        else:
-            stage = 1
+        stage = 2 if pgo_stage(stage) else 1
         ar = get_stage_binary("llvm-ar", dirs, stage)
         cc = get_stage_binary("clang", dirs, stage)
         clang_tblgen = get_stage_binary("clang-tblgen", dirs, stage)
@@ -841,27 +829,20 @@ def project_cmake_defines(args, stage):
     :param stage: What stage we are at
     :return: A set of defines
     """
-    defines = {}
-
     if args.full_toolchain:
-        if args.projects:
-            projects = args.projects
-        else:
-            projects = "all"
+        projects = args.projects or "all"
+    elif bootstrap_stage(args, stage):
+        projects = "clang;lld"
+        if args.pgo:
+            projects += ';compiler-rt'
+    elif instrumented_stage(args, stage):
+        projects = "clang;lld"
+    elif args.projects:
+        projects = args.projects
     else:
-        if bootstrap_stage(args, stage):
-            projects = "clang;lld"
-            if args.pgo:
-                projects += ';compiler-rt'
-        elif instrumented_stage(args, stage):
-            projects = "clang;lld"
-        elif args.projects:
-            projects = args.projects
-        else:
-            projects = "clang;compiler-rt;lld;polly"
+        projects = "clang;compiler-rt;lld;polly"
 
-    defines['LLVM_ENABLE_PROJECTS'] = projects
-
+    defines = {'LLVM_ENABLE_PROJECTS': projects}
     if "compiler-rt" in projects:
         if not args.full_toolchain:
             # Don't build libfuzzer when compiler-rt is enabled, it invokes cmake again and we don't use it
@@ -884,13 +865,11 @@ def get_targets(args):
     :return: A string of targets suitable for cmake or kernel/build.sh
     """
     if args.targets:
-        targets = args.targets
+        return args.targets
     elif args.full_toolchain:
-        targets = "all"
+        return "all"
     else:
-        targets = "AArch64;ARM;BPF;Hexagon;Mips;PowerPC;RISCV;SystemZ;X86"
-
-    return targets
+        return "AArch64;ARM;BPF;Hexagon;Mips;PowerPC;RISCV;SystemZ;X86"
 
 
 def target_cmake_defines(args, stage):
@@ -901,16 +880,8 @@ def target_cmake_defines(args, stage):
     :param stage: What stage we are at
     :return: A set of defines
     """
-    defines = {}
-
-    if bootstrap_stage(args, stage):
-        targets = "host"
-    else:
-        targets = get_targets(args)
-
-    defines['LLVM_TARGETS_TO_BUILD'] = targets
-
-    return defines
+    targets = "host" if bootstrap_stage(args, stage) else get_targets(args)
+    return {'LLVM_TARGETS_TO_BUILD': targets}
 
 
 def stage_specific_cmake_defines(args, dirs, stage):
@@ -971,7 +942,7 @@ def stage_specific_cmake_defines(args, dirs, stage):
         # are taken into account by cmake)
         keys = ['CMAKE_C_FLAGS', 'CMAKE_CXX_FLAGS']
         for key in keys:
-            if not key in str(args.defines):
+            if key not in str(args.defines):
                 defines[key] = ''
 
         # For LLVMgold.so, which is used for LTO with ld.gold
@@ -1053,11 +1024,11 @@ def invoke_cmake(args, dirs, env_vars, stage):
     cmake = ['cmake', '-G', 'Ninja', '-Wno-dev']
     defines = build_cmake_defines(args, dirs, env_vars, stage)
     for key in defines:
-        newdef = '-D' + key + '=' + defines[key]
+        newdef = f'-D{key}={defines[key]}'
         cmake += [newdef]
     if args.defines:
         for d in args.defines:
-            cmake += ['-D' + d]
+            cmake += [f'-D{d}']
     cmake += [dirs.llvm_folder.joinpath("llvm").as_posix()]
 
     header_string, sub_folder = get_pgo_header_folder(stage)
@@ -1262,11 +1233,7 @@ def main():
 
     env_vars = EnvVars(*check_cc_ld_variables(root_folder))
     check_dependencies()
-    if args.use_good_revision:
-        ref = GOOD_REVISION
-    else:
-        ref = args.branch
-
+    ref = GOOD_REVISION if args.use_good_revision else args.branch
     if args.llvm_folder:
         llvm_folder = pathlib.Path(args.llvm_folder)
         if not llvm_folder.is_absolute():

@@ -208,7 +208,7 @@ def invoke_make(build_folder, install_folder, target):
     :param install_folder: Directory to install binutils to
     :param target: Target to compile for
     """
-    make = ['make', '-s', '-j' + str(multiprocessing.cpu_count()), 'V=0']
+    make = ['make', '-s', f'-j{str(multiprocessing.cpu_count())}', 'V=0']
     if host_is_target(target):
         subprocess.run(make + ['configure-host'],
                        check=True,
@@ -252,10 +252,7 @@ def main():
     if not install_folder.is_absolute():
         install_folder = root_folder.joinpath(install_folder)
 
-    targets = ["all"]
-    if args.targets is not None:
-        targets = args.targets
-
+    targets = args.targets if args.targets is not None else ["all"]
     utils.download_binutils(root_folder)
 
     build_targets(build_folder, install_folder, root_folder,

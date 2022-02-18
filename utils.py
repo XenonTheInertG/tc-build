@@ -41,13 +41,18 @@ def download_binutils(folder):
                 entity.unlink()
 
         # Download the tarball
-        binutils_tarball = folder.joinpath(binutils + ".tar.xz")
-        subprocess.run([
-            "curl", "-LSs", "-o",
-            binutils_tarball.as_posix(),
-            "https://ftp.gnu.org/gnu/binutils/" + binutils_tarball.name
-        ],
-                       check=True)
+        binutils_tarball = folder.joinpath(f'{binutils}.tar.xz')
+        subprocess.run(
+            [
+                "curl",
+                "-LSs",
+                "-o",
+                binutils_tarball.as_posix(),
+                f'https://ftp.gnu.org/gnu/binutils/{binutils_tarball.name}',
+            ],
+            check=True,
+        )
+
         verify_binutils_checksum(binutils_tarball)
         # Extract the tarball then remove it
         subprocess.run(["tar", "-xJf", binutils_tarball.name],
@@ -82,10 +87,10 @@ def print_header(string):
     # Use bold cyan for the header so that the headers
     # are not intepreted as success (green) or failed (red)
     print("\033[01;36m")
-    for x in range(0, len(string) + 6):
+    for _ in range(len(string) + 6):
         print("=", end="")
     print("\n== %s ==" % string)
-    for x in range(0, len(string) + 6):
+    for _ in range(len(string) + 6):
         print("=", end="")
     # \033[0m resets the color back to the user's default
     print("\n\033[0m")
